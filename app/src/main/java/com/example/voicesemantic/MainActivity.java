@@ -103,8 +103,13 @@ public final class MainActivity extends Activity {
         findViewById(R.id.importLlmBtn).setOnClickListener(v->importModel());
         recordingButtons(false);
         loadVosk();
-        File saved=new File(new File(getFilesDir(),"llm"),"semantic.task");
-        if(saved.isFile())loadLlm(saved);
+        File savedModel = new File(
+            new File(getFilesDir(), "llm"),
+            "semantic.task"
+        );
+        if (savedModel.isFile()) {
+            loadLlm(savedModel);
+        }
         else llmStatus.setText("未导入本地小模型；使用规则Agent。可导入MediaPipe兼容的.task模型。");
     }
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
