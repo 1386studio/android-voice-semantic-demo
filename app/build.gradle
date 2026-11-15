@@ -1,0 +1,39 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.example.voicesemantic'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.example.voicesemantic'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+        ndk { abiFilters 'arm64-v8a' }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    packaging {
+        jniLibs { useLegacyPackaging true }
+    }
+}
+
+dependencies {
+    // 仅在构建电脑下载依赖，App运行过程中不联网。
+    implementation 'com.alphacephei:vosk-android:0.3.75'
+}
+
+// 语音APK不得漏打中文ASR模型，否则只能输入文本，采音功能不可用。
+tasks.register('verifyBundledAsrModel') {
+    doLast {
+        def model = file('src/main/assets/model-cn/am/final.mdl')
+        if (!model.isFile() || model.length() == 0) {
+            throw new GradleException('缺少中文离线ASR模型。先运行 python3 scripts/fetch_model.py 再构建APK。')
+        }
+    }
+}
+tasks.named('preBuild') { dependsOn('verifyBundledAsrModel') }

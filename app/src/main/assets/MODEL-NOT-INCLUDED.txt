@@ -1,0 +1,4 @@
+中文Vosk模型没有随源码压缩包提供。
+在联网的构建电脑执行：python3 scripts/fetch_model.py
+脚本会把 vosk-model-small-cn-0.22 放入 app/src/main/assets/model-cn/。
+打包后APP运行不需要互联网。

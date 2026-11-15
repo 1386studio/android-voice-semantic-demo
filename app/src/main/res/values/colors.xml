@@ -1,0 +1,10 @@
+<resources>
+  <color name="forest">#244F45</color>
+  <color name="forest_dark">#18382F</color>
+  <color name="background">#F3F6F4</color>
+  <color name="white">#FFFFFF</color>
+  <color name="text_dark">#20332D</color>
+  <color name="text_muted">#60746D</color>
+  <color name="accent">#297766</color>
+  <color name="line">#DBE6E0</color>
+</resources>

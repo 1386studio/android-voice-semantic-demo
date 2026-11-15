@@ -1,0 +1,19 @@
+<resources>
+  <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:fontFamily">sans</item>
+    <item name="android:colorAccent">@color/accent</item>
+    <item name="android:windowLightStatusBar">false</item>
+    <item name="android:statusBarColor">@color/forest_dark</item>
+    <item name="android:navigationBarColor">@color/forest_dark</item>
+    <item name="android:windowActionModeOverlay">true</item>
+  </style>
+  <style name="CardTitle">
+    <item name="android:textSize">16sp</item>
+    <item name="android:textColor">@color/text_dark</item>
+    <item name="android:textStyle">bold</item>
+  </style>
+  <style name="DetailText">
+    <item name="android:textSize">13sp</item>
+    <item name="android:textColor">@color/text_muted</item>
+  </style>
+</resources>
