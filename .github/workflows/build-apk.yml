@@ -16,11 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
+
+      - name: Verify Java version
+        run: |
+          java -version
+          javac -version
+          test "$(javac -version 2>&1 | awk '{print $2}' | cut -d. -f1)" = "21"
 
       - name: Find Android SDK
         shell: bash
