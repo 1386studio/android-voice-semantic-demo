@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   android-apk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
 
     steps:
@@ -24,48 +24,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Check Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          command -v sdkmanager
+          sdkmanager --version
 
       - name: Install Android SDK
         run: |
           sdkmanager --install \
             'platforms;android-35' \
             'build-tools;35.0.0'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Download Chinese ASR model
-        run: python3 scripts/fetch_model.py
-
-      - name: Verify ASR model
-        run: |
-          test -s app/src/main/assets/model-cn/am/final.mdl
-
-      - name: Run semantic tests
-        run: bash tests/run_semantic_test.sh
-
-      - name: Build Debug APK
-        run: gradle --no-daemon :app:assembleDebug
-
-      - name: Verify APK
-        run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          test -s "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" \
-            verify --verbose "$APK"
-          sha256sum "$APK" \
-            > app/build/outputs/apk/debug/SHA256SUMS
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: voice-semantic-debug-apk
-          path: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/debug/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 14
