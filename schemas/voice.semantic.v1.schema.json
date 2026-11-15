@@ -4,65 +4,167 @@
   "title": "Voice Semantic Message V1 (local preview)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "message_id", "created_at", "source", "recognition", "agent", "semantic", "validation", "execution"],
+  "required": [
+    "schema",
+    "message_id",
+    "created_at",
+    "source",
+    "recognition",
+    "agent",
+    "semantic",
+    "validation",
+    "execution"
+  ],
   "properties": {
-    "schema": {"const": "voice.semantic.v1"},
-    "message_id": {"type": "string", "minLength": 1},
-    "created_at": {"type": "string", "format": "date-time"},
+    "schema": {
+      "const": "voice.semantic.v1"
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "source": {
-      "type": "object", "required": ["device", "input_mode"],
+      "type": "object",
+      "required": [
+        "device",
+        "input_mode"
+      ],
       "properties": {
-        "device": {"type": "string"},
-        "input_mode": {"enum": ["voice", "manual_text"]}
+        "device": {
+          "type": "string"
+        },
+        "input_mode": {
+          "enum": [
+            "voice",
+            "manual_text"
+          ]
+        }
       }
     },
     "recognition": {
-      "type": "object", "required": ["text", "language"],
+      "type": "object",
+      "required": [
+        "text",
+        "language"
+      ],
       "properties": {
-        "text": {"type": "string"}, "language": {"const": "zh-CN"}
+        "text": {
+          "type": "string"
+        },
+        "language": {
+          "const": "zh-CN"
+        }
       }
     },
     "agent": {
-      "type": "object", "required": ["engine", "engine_version", "llm_used"],
+      "type": "object",
+      "required": [
+        "engine",
+        "engine_version",
+        "llm_used"
+      ],
       "properties": {
-        "engine": {"const": "deterministic_rule_agent"},
-        "engine_version": {"type": "string"},
-        "llm_used": {"const": false}
+        "engine": {
+          "enum": [
+            "deterministic_rule_agent",
+            "mediapipe_on_device_llm"
+          ]
+        },
+        "engine_version": {
+          "type": "string"
+        },
+        "llm_used": {
+          "type": "boolean"
+        }
       }
     },
     "semantic": {
-      "type": "object", "required": ["intent", "entities", "operations"],
+      "type": "object",
+      "required": [
+        "intent",
+        "entities",
+        "operations"
+      ],
       "properties": {
-        "intent": {"type": "string"},
-        "entities": {"type": "object"},
+        "intent": {
+          "type": "string"
+        },
+        "entities": {
+          "type": "object"
+        },
         "operations": {
-          "type": "array", "items": {
-            "type": "object", "additionalProperties": false,
-            "required": ["step", "action", "parameters"],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "step",
+              "action",
+              "parameters"
+            ],
             "properties": {
-              "step": {"type": "integer", "minimum": 1},
-              "action": {
-                "enum": ["device.status.query", "device.history.query", "inventory.query", "task.list", "map.open", "location.show", "group.message.publish"]
+              "step": {
+                "type": "integer",
+                "minimum": 1
               },
-              "parameters": {"type": "object"}
+              "action": {
+                "enum": [
+                  "device.status.query",
+                  "device.history.query",
+                  "inventory.query",
+                  "task.list",
+                  "map.open",
+                  "location.show",
+                  "group.message.publish"
+                ]
+              },
+              "parameters": {
+                "type": "object"
+              }
             }
           }
         }
       }
     },
     "validation": {
-      "type": "object", "required": ["schema_ready", "requires_confirmation", "warnings"],
+      "type": "object",
+      "required": [
+        "schema_ready",
+        "requires_confirmation",
+        "warnings"
+      ],
       "properties": {
-        "schema_ready": {"type": "boolean"},
-        "requires_confirmation": {"type": "boolean"},
-        "warnings": {"type": "array", "items": {"type": "string"}}
+        "schema_ready": {
+          "type": "boolean"
+        },
+        "requires_confirmation": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "execution": {
-      "type": "object", "required": ["state", "reason"],
+      "type": "object",
+      "required": [
+        "state",
+        "reason"
+      ],
       "properties": {
-        "state": {"const": "not_executed"},
-        "reason": {"const": "semantic_preview_only"}
+        "state": {
+          "const": "not_executed"
+        },
+        "reason": {
+          "const": "semantic_preview_only"
+        }
       }
     }
   }

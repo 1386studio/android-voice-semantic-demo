@@ -103,13 +103,8 @@ public final class MainActivity extends Activity {
         findViewById(R.id.importLlmBtn).setOnClickListener(v->importModel());
         recordingButtons(false);
         loadVosk();
-        File savedModel = new File(
-            new File(getFilesDir(), "llm"),
-            "semantic.task"
-        );
-        if (savedModel.isFile()) {
-            loadLlm(savedModel);
-        }
+        File savedModel=new File(new File(getFilesDir(),"llm"),"semantic.task");
+        if(savedModel.isFile())loadLlm(savedModel);
         else llmStatus.setText("未导入本地小模型；使用规则Agent。可导入MediaPipe兼容的.task模型。");
     }
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
@@ -217,10 +212,22 @@ public final class MainActivity extends Activity {
             try{
                 if(llm.ready()){
                     String proposed=llm.infer(text);
-                    JSONObject structured=LlmSemanticValidator.normalize(proposed,text);
+                    JSONObject structured;
+                    boolean repaired=false;
+                    try{
+                        structured=LlmSemanticValidator.normalize(proposed,text);
+                    }catch(JSONException firstError){
+                        // Do not accept arbitrary generic verbs (e.g. "query").
+                        // Ask the on-device model for exactly one constrained repair.
+                        String corrected=llm.repair(text,proposed,firstError.getMessage());
+                        structured=LlmSemanticValidator.normalize(corrected,text);
+                        repaired=true;
+                    }
                     structured.getJSONObject("source").put("input_mode",inputMode);
                     result=structured.toString(2);
-                    status="本地小模型Agent已运行 · 已验证动作白名单 · 仅展示";
+                    status=repaired
+                        ? "本地小模型Agent：协议修正后通过校验 · 仅预览"
+                        : "本地小模型Agent：动作协议校验通过 · 仅预览";
                 }else{throw new IllegalStateException("未加载LLM");}
             }catch(Exception e){
                 SemanticAgent.Result parsed=fallback.interpret(text,inputMode);

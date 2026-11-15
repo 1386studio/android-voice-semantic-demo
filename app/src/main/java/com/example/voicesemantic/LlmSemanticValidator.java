@@ -5,14 +5,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Iterator;
 
 /** Rejects unknown actions, dangerous writes and malformed JSON. Always preview only. */
 final class LlmSemanticValidator {
-    private static final Set<String> ALLOWED=new HashSet<>();
-    static {
-        for(String name:new String[]{"device.status.query","device.history.query","inventory.query",
-            "task.list","map.open","location.show","group.message.publish"})ALLOWED.add(name);
-    }
     static JSONObject normalize(String raw,String transcript) throws JSONException {
         if(raw==null)throw new JSONException("空模型输出");
         int a=raw.indexOf('{'),b=raw.lastIndexOf('}');
@@ -26,10 +22,20 @@ final class LlmSemanticValidator {
         for(int i=0;i<actions.length();i++){
             JSONObject op=actions.optJSONObject(i);
             if(op==null)throw new JSONException("存在无效操作元素");
-            String name=op.optString("action","");
-            if(!ALLOWED.contains(name))throw new JSONException("非法动作类型："+name);
+            String rawName=op.optString("action","");
             JSONObject params=op.optJSONObject("parameters");
             if(params==null)params=new JSONObject();
+            Set<String> keys=new HashSet<>();
+            for(Iterator<String> it=params.keys(); it.hasNext();) {
+                String key=it.next();
+                if(!params.isNull(key) && !params.optString(key,"").trim().isEmpty())keys.add(key);
+            }
+            String name;
+            try {
+                name=ActionCanonicalizer.canonicalize(rawName,keys);
+            } catch(IllegalArgumentException ex){
+                throw new JSONException(ex.getMessage());
+            }
             if(name.equals("group.message.publish"))confirm=true;
             if(name.startsWith("device.") && !params.has("device_id"))confirm=true;
             JSONObject safe=new JSONObject();
@@ -43,7 +49,8 @@ final class LlmSemanticValidator {
         message.put("created_at",new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX",java.util.Locale.US).format(new java.util.Date()));
         message.put("source",new JSONObject().put("device","android_local").put("input_mode","voice_or_text"));
         message.put("recognition",new JSONObject().put("text",transcript).put("language","zh-CN"));
-        message.put("agent",new JSONObject().put("engine","mediapipe_on_device_llm").put("llm_used",true));
+        message.put("agent",new JSONObject().put("engine","mediapipe_on_device_llm")
+            .put("engine_version","0.2.1").put("llm_used",true));
         message.put("semantic",new JSONObject().put("intent",obj.optString("intent","unknown"))
             .put("entities",new JSONObject()).put("operations",safeActions));
         message.put("validation",new JSONObject().put("schema_ready",!confirm)
