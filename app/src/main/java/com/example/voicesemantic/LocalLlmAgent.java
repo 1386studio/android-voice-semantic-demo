@@ -17,8 +17,6 @@ final class LocalLlmAgent implements AutoCloseable {
         LlmInference.LlmInferenceOptions options=LlmInference.LlmInferenceOptions.builder()
             .setModelPath(file.getAbsolutePath())
             .setMaxTokens(512)
-            .setTopK(1)
-            .setTemperature(0.1f)
             .build();
         engine=LlmInference.createFromOptions(appContext,options);
         loadedModel=file.getName();
