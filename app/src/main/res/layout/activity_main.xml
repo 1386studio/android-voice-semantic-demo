@@ -1,92 +1,141 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:fillViewport="true" android:background="@color/background">
+    android:background="@color/background" android:fillViewport="true">
   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-      android:orientation="vertical" android:padding="18dp">
+      android:orientation="vertical" android:padding="16dp">
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="语音 → 语义" android:textColor="@color/forest_dark"
-        android:textSize="27sp" android:textStyle="bold" />
+        android:text="语音 → 智能体 → 语义" android:textColor="@color/forest_dark"
+        android:textSize="25sp" android:textStyle="bold" />
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="4dp" android:text="Android离线测试 · 无网络传输 · 不执行业务操作"
-        style="@style/DetailText" />
+        android:layout_marginTop="4dp" style="@style/DetailText"
+        android:text="V0.2 完全离线 · 双WAV对比 · RNNoise · 本地LLM可选" />
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:layout_marginTop="16dp" android:padding="15dp"
+        android:layout_marginTop="12dp" android:padding="14dp" android:orientation="vertical"
         android:background="@drawable/card_background">
       <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-          style="@style/CardTitle" android:text="01  手机高鲁棒音频采集" />
+          style="@style/CardTitle" android:text="01  高鲁棒手机采音与实时降噪" />
       <TextView android:id="@+id/modelStatus" android:layout_width="match_parent"
           android:layout_height="wrap_content" android:layout_marginTop="8dp"
-          style="@style/DetailText" android:text="正在检测离线ASR模型…" />
+          style="@style/DetailText" android:text="正在装载离线中文ASR…" />
       <Switch android:id="@+id/nsSwitch" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:layout_marginTop="10dp"
-          android:text="使用系统麦克风降噪（设备支持时）" android:checked="true"
+          android:layout_height="wrap_content" android:checked="false"
+          android:text="手机系统降噪（用于对比）" android:textColor="@color/text_dark" />
+      <Switch android:id="@+id/rnSwitch" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:checked="true"
+          android:text="RNNoise 48kHz/10ms 实时神经降噪" android:textColor="@color/text_dark" />
+      <Switch android:id="@+id/grammarSwitch" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:checked="false"
+          android:text="ASR领域短指令词表（自由口述时关闭）"
           android:textColor="@color/text_dark" />
       <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-          android:orientation="horizontal" android:layout_marginTop="8dp">
-        <Button android:id="@+id/startBtn" android:layout_width="0dp" android:layout_weight="1"
-            android:layout_height="wrap_content" android:text="开始采音" android:enabled="false"
+          android:orientation="horizontal">
+        <Button android:id="@+id/startBtn" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="wrap_content"
+            android:enabled="false" android:text="开始录音"
             android:textColor="@color/white" android:backgroundTint="@color/forest" />
-        <Button android:id="@+id/stopBtn" android:layout_width="0dp" android:layout_weight="1"
-            android:layout_height="wrap_content" android:layout_marginStart="8dp"
-            android:text="停止并解析" android:enabled="false"
-            android:textColor="@color/white" android:backgroundTint="@color/accent" />
+        <Button android:id="@+id/stopBtn" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="wrap_content"
+            android:enabled="false" android:layout_marginStart="8dp"
+            android:text="停止识别" android:textColor="@color/white"
+            android:backgroundTint="@color/accent" />
       </LinearLayout>
       <ProgressBar android:id="@+id/levelBar" style="?android:attr/progressBarStyleHorizontal"
           android:layout_width="match_parent" android:layout_height="8dp"
-          android:layout_marginTop="10dp" android:max="100" android:progress="0" />
+          android:max="100" android:progress="0" />
       <TextView android:id="@+id/audioStatus" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:layout_marginTop="6dp"
-          android:text="等待录音 · 48kHz/16bit/Mono → 16kHz ASR" style="@style/DetailText" />
+          android:layout_height="wrap_content" android:layout_marginTop="8dp"
+          style="@style/DetailText" android:text="48kHz单声道采集 · 每块10ms" />
     </LinearLayout>
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:layout_marginTop="12dp" android:padding="15dp"
+        android:layout_marginTop="12dp" android:padding="14dp" android:orientation="vertical"
         android:background="@drawable/card_background">
       <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-          android:text="02  端侧ASR + 规则型Agent" style="@style/CardTitle" />
-      <TextView android:id="@+id/transcriptView" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:minHeight="60dp" android:layout_marginTop="12dp"
-          android:text="识别文字会显示在这里…" android:textColor="@color/text_dark"
-          android:textSize="16sp" android:textIsSelectable="true" />
+          style="@style/CardTitle" android:text="02  原始录音 / 降噪录音回放" />
+      <TextView android:id="@+id/recordingStatus" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:layout_marginTop="8dp"
+          style="@style/DetailText" android:text="录音结束后生成两段48kHz/16bit WAV，保存于App私有音乐目录" />
+      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+          android:orientation="horizontal" android:layout_marginTop="6dp">
+        <Button android:id="@+id/playRawBtn" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:enabled="false" android:text="播放采集流" />
+        <Button android:id="@+id/playEnhancedBtn" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:layout_marginStart="6dp"
+            android:enabled="false" android:text="播放增强流" />
+      </LinearLayout>
+      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+          android:orientation="horizontal">
+        <Button android:id="@+id/exportRawBtn" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:enabled="false" android:text="导出采集WAV" />
+        <Button android:id="@+id/exportEnhancedBtn" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:layout_marginStart="6dp"
+            android:enabled="false" android:text="导出增强WAV" />
+      </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="12dp" android:padding="14dp" android:orientation="vertical"
+        android:background="@drawable/card_background">
       <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-          style="@style/DetailText" android:layout_marginTop="7dp"
-          android:text="无模型时仍可输入文字，测试Agent语义化。此版使用可解释规则，不假装运行本地LLM。" />
+          style="@style/CardTitle" android:text="03  离线ASR与端侧小模型Agent" />
+      <TextView android:id="@+id/transcriptView" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:minHeight="64dp"
+          android:layout_marginTop="8dp" android:textColor="@color/text_dark"
+          android:textSize="16sp" android:textIsSelectable="true"
+          android:text="识别文字会显示在这里…" />
+      <TextView android:id="@+id/rawAsrView" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:layout_marginTop="6dp"
+          style="@style/DetailText" android:text="采集流ASR复核：尚无录音" />
+      <EditText android:id="@+id/referenceInput" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:layout_marginTop="6dp"
+          android:hint="参考文字（人工校对后用于计算CER）" android:inputType="text" />
+      <Button android:id="@+id/calcCerBtn" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:text="计算双路ASR字符错误率" />
+      <TextView android:id="@+id/cerStatus" android:layout_width="match_parent"
+          android:layout_height="wrap_content" style="@style/DetailText"
+          android:text="等待参考文字" />
+      <TextView android:id="@+id/llmStatus" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:layout_marginTop="6dp"
+          style="@style/DetailText" android:text="尚未装载小模型" />
+      <Button android:id="@+id/importLlmBtn" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:text="导入本地小模型（.task）"
+          android:textColor="@color/text_dark" android:backgroundTint="@color/line" />
+      <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+          style="@style/DetailText"
+          android:text="先使用普通中文离线ASR；如导入兼容模型，使用本地LLM生成语义，再经动作白名单校验。" />
       <EditText android:id="@+id/manualInput" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:layout_marginTop="10dp"
-          android:minLines="2" android:maxLines="4" android:gravity="top|start"
-          android:inputType="textMultiLine" android:textSize="15sp"
+          android:layout_height="wrap_content" android:minLines="2" android:maxLines="4"
+          android:gravity="top|start" android:inputType="textMultiLine"
           android:hint="例如：查询三号终端电量，并把结果发给当前工作组" />
       <Button android:id="@+id/parseBtn" android:layout_width="match_parent"
           android:layout_height="wrap_content" android:text="解析输入文字"
-          android:backgroundTint="@color/forest" android:textColor="@color/white" />
+          android:textColor="@color/white" android:backgroundTint="@color/forest" />
       <Button android:id="@+id/exampleBtn" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:text="填入示例指令"
-          android:backgroundTint="@color/line" android:textColor="@color/text_dark" />
+          android:layout_height="wrap_content" android:text="填入示例指令" />
     </LinearLayout>
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="vertical" android:layout_marginTop="12dp" android:padding="15dp"
+        android:layout_marginTop="12dp" android:padding="14dp" android:orientation="vertical"
         android:background="@drawable/card_background">
       <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-          android:text="03  标准化语义消息" style="@style/CardTitle" />
+          style="@style/CardTitle" android:text="04  标准化语义JSON（不执行、不传输）" />
       <TextView android:id="@+id/semanticStatus" android:layout_width="match_parent"
           android:layout_height="wrap_content" android:layout_marginTop="8dp"
-          android:text="等待输入" style="@style/DetailText" />
+          style="@style/DetailText" android:text="等待输入" />
       <TextView android:id="@+id/jsonView" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:layout_marginTop="10dp"
-          android:background="@color/background" android:padding="10dp"
-          android:minHeight="120dp" android:textSize="12sp"
+          android:layout_height="wrap_content" android:layout_marginTop="8dp"
+          android:background="@color/background" android:minHeight="140dp"
+          android:padding="10dp" android:text="{}" android:textSize="12sp"
           android:typeface="monospace" android:textColor="@color/text_dark"
-          android:textIsSelectable="true" android:text="{}" />
+          android:textIsSelectable="true" />
       <Button android:id="@+id/copyBtn" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:text="复制语义JSON"
-          android:backgroundTint="@color/line" android:textColor="@color/text_dark" />
+          android:layout_height="wrap_content" android:text="复制JSON" />
     </LinearLayout>
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="14dp" android:layout_marginBottom="14dp"
-        android:text="隐私：无INTERNET权限；不保存录音；语义结果仅在本机显示。"
-        style="@style/DetailText" />
+        android:layout_marginTop="14dp" android:layout_marginBottom="16dp"
+        style="@style/DetailText"
+        android:text="隐私：无INTERNET权限。录音存储于App私有目录，可选择导出。删除App会删除其私有录音与模型。仅展示语义，不调用业务工具。" />
   </LinearLayout>
 </ScrollView>

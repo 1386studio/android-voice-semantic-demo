@@ -1,0 +1,15 @@
+.gradle/
+.idea/
+local.properties
+app/build/
+build/
+app/src/main/assets/model-cn/
+*.apk
+*.aab
+
+# Native RNNoise source + downloaded neural weights: fetched at build time
+app/src/main/cpp/vendor/
+app/src/main/assets/model-cn/
+*.task
+*.gguf
+*.wav

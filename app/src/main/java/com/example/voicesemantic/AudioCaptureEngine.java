@@ -1,164 +1,210 @@
 package com.example.voicesemantic;
 
+import android.content.Context;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.media.audiofx.NoiseSuppressor;
+import android.os.Environment;
 import android.os.SystemClock;
 import org.json.JSONObject;
 import org.vosk.Model;
 import org.vosk.Recognizer;
+import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * 48kHz/mono/16-bit AudioRecord -> 10ms DSP块 -> 16kHz Vosk；
- * ASR独立线程，音频线程不做模型推理，队列上限防止内存无限增长。
- */
+/** 48kHz AudioRecord -> optional real RNNoise 480-sample frames -> 48kHz WAV x2 -> 16kHz Vosk. */
 final class AudioCaptureEngine {
     interface Listener {
         void onAudioStatus(String message);
-        void onLevel(int percentage, String detail);
+        void onLevel(int percentage,String detail);
         void onPartial(String text);
         void onFinal(String text);
         void onError(String message);
+        void onSaved(File original,File enhanced,String pathInfo);
     }
-    private static final int SAMPLE_RATE=48000, FRAME_SIZE=480;
+    static final int SAMPLE_RATE=48000, FRAME_SIZE=480;
+    private static final int MAX_SECONDS=180;
     private static final short[] END=new short[0];
+    static final String GRAMMAR="[\"查询三号终端的剩余电量\",\"查看当前任务\",\"打开地图\",\"显示当前位置\",\"查询一号仓库饮用水库存\",\"查询二号设备运行状态\",\"最近十分钟\",\"工作组\",\"发送\",\"查询\",\"终端\",\"设备\",\"电量\",\"库存\",\"[unk]\"]";
+    private final Context context;
     private final Model model;
     private final Listener listener;
     private final AtomicBoolean running=new AtomicBoolean(false);
     private final ArrayBlockingQueue<short[]> queue=new ArrayBlockingQueue<>(220);
-    private volatile boolean captureFinished=false;
-    private volatile boolean overrun=false;
-    private volatile AudioRecord activeRecord;
-    private Thread captureThread, recognitionThread;
+    private volatile boolean captureFinished=false,overrun=false;
+    private Thread captureThread,asrThread;
 
-    AudioCaptureEngine(Model model, Listener listener){this.model=model;this.listener=listener;}
-
-    synchronized boolean start(boolean enableSystemNs){
+    AudioCaptureEngine(Context context,Model model,Listener listener){
+        this.context=context.getApplicationContext();this.model=model;this.listener=listener;
+    }
+    synchronized boolean start(boolean enableSystemNs,boolean enableRnnoise,boolean domainGrammar){
         if(running.get())return false;
-        if((captureThread!=null&&captureThread.isAlive()) ||
-           (recognitionThread!=null&&recognitionThread.isAlive())){
-            listener.onError("上一轮语音流尚未完成，请稍后重试");
-            return false;
+        if((captureThread!=null&&captureThread.isAlive()) || (asrThread!=null&&asrThread.isAlive())){
+            listener.onError("上一轮音频仍在处理");return false;
         }
-        queue.clear(); captureFinished=false; overrun=false;
+        if(enableRnnoise&&!RnnoiseBridge.available()){
+            listener.onError("RNNoise原生库不可用，无法启用神经降噪");return false;
+        }
+        queue.clear(); captureFinished=false;overrun=false;
         int min=AudioRecord.getMinBufferSize(SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
-        if(min<=0){listener.onError("当前设备不支持48kHz单通道录音");return false;}
-        AudioRecord rec=null;
-        try{
-            rec=new AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+        if(min<=0){listener.onError("设备不支持48kHz PCM录音");return false;}
+        AudioRecord rec=null;NoiseSuppressor ns=null;
+        try {
+            AudioManager manager=(AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
+            boolean supportsRaw=manager!=null && "true".equalsIgnoreCase(manager.getProperty(
+                AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED));
+            int source=supportsRaw ? MediaRecorder.AudioSource.UNPROCESSED : MediaRecorder.AudioSource.VOICE_RECOGNITION;
+            rec=new AudioRecord.Builder().setAudioSource(source)
                 .setAudioFormat(new AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                     .setSampleRate(SAMPLE_RATE)
                     .setChannelMask(AudioFormat.CHANNEL_IN_MONO).build())
-                .setBufferSizeInBytes(Math.max(min,FRAME_SIZE*2*8))
-                .build();
-            if(rec.getState()!=AudioRecord.STATE_INITIALIZED)
-                throw new IllegalStateException("AudioRecord初始化失败");
+                .setBufferSizeInBytes(Math.max(min,FRAME_SIZE*2*8)).build();
+            if(rec.getState()!=AudioRecord.STATE_INITIALIZED)throw new IllegalStateException("麦克风初始化失败");
+            boolean nsEnabled=false;
+            if(NoiseSuppressor.isAvailable()){
+                ns=NoiseSuppressor.create(rec.getAudioSessionId());
+                if(ns!=null){ns.setEnabled(enableSystemNs&&!enableRnnoise);nsEnabled=ns.getEnabled();}
+            }
+            // Capture the hardware/OS-processed stream, not physically unmodified ADC samples.
             rec.startRecording();
             if(rec.getRecordingState()!=AudioRecord.RECORDSTATE_RECORDING)
-                throw new IllegalStateException("麦克风可能被其他应用占用");
-            activeRecord=rec;
+                throw new IllegalStateException("麦克风被占用或权限不足");
             running.set(true);
-            final AudioRecord captured=rec;
-            final boolean ns=enableSystemNs;
-            recognitionThread=new Thread(this::recognizeLoop,"offline-asr");
-            captureThread=new Thread(()->captureLoop(captured,ns),"audio-capture");
-            recognitionThread.start(); captureThread.start();
+            final AudioRecord record=rec;
+            final NoiseSuppressor effect=ns;
+            final boolean systemNsActive=nsEnabled;
+            final String rawMode=supportsRaw?"UNPROCESSED(请求)":"VOICE_RECOGNITION(后备)";
+            asrThread=new Thread(()->recognizeLoop(domainGrammar),"voice-asr");
+            captureThread=new Thread(()->captureLoop(record,effect,rawMode,systemNsActive,enableRnnoise),"voice-capture");
+            asrThread.start();captureThread.start();
             return true;
         }catch(Exception e){
             running.set(false);
-            if(rec!=null){try{rec.release();}catch(Exception ignored){}}
-            activeRecord=null;
-            listener.onError("录音启动失败："+e.getMessage());
-            return false;
+            if(ns!=null)try{ns.release();}catch(Exception ignored){}
+            if(rec!=null)try{rec.release();}catch(Exception ignored){}
+            listener.onError("无法开始录音："+e.getMessage());return false;
         }
     }
-
     void stop(){running.set(false);}
     boolean isRunning(){return running.get();}
 
-    private void captureLoop(AudioRecord record,boolean nsRequested){
-        NoiseSuppressor suppressor=null;
-        try{
-            boolean nsActive=false;
-            if(NoiseSuppressor.isAvailable()){
-                try{
-                    suppressor=NoiseSuppressor.create(record.getAudioSessionId());
-                    if(suppressor!=null){
-                        // VOICE_RECOGNITION可能默认已有音效，显式读取实际状态。
-                        suppressor.setEnabled(nsRequested);
-                        nsActive=suppressor.getEnabled();
-                    }
-                }catch(Exception ex){ listener.onAudioStatus("系统降噪开关不可用，继续原始采音"); }
-            }
-            listener.onAudioStatus("采音中 | 48kHz PCM | 系统NS："+(nsActive?"已启用":"未启用/设备不支持"));
+    private void captureLoop(AudioRecord record,NoiseSuppressor ns,String rawMode,boolean systemNsActive,boolean enableRnnoise){
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
+        PcmWavWriter rawWriter=null,enhancedWriter=null;
+        RnnoiseBridge denoiser=null;
+        File rawFile=null,enhancedFile=null;
+        boolean success=false;
+        try {
+            File root=context.getExternalFilesDir(Environment.DIRECTORY_MUSIC);
+            if(root==null)root=context.getFilesDir();
+            File dir=new File(root,"voice-sessions");
+            String session=new SimpleDateFormat("yyyyMMdd-HHmmss-SSS",Locale.US).format(new Date());
+            rawFile=new File(dir,session+"-capture.wav");
+            enhancedFile=new File(dir,session+"-enhanced.wav");
+            rawWriter=new PcmWavWriter(rawFile,SAMPLE_RATE,1);
+            enhancedWriter=new PcmWavWriter(enhancedFile,SAMPLE_RATE,1);
+            if(enableRnnoise)denoiser=new RnnoiseBridge();
+            listener.onAudioStatus("录音中 | "+rawMode+" | 系统NS:"+systemNsActive+" | RNNoise:"+enableRnnoise);
             PcmPreprocessor dsp=new PcmPreprocessor();
-            short[] input=new short[FRAME_SIZE];
+            short[] readBuffer=new short[FRAME_SIZE],frame=new short[FRAME_SIZE],processed=new short[FRAME_SIZE];
             short[] downsampled=new short[FRAME_SIZE/3+4];
-            long lastLevel=0;
-            int dropped=0;
+            int frameFill=0;
+            int slowFrames=0;long maxDenoiseNanos=0;
+            long start=SystemClock.uptimeMillis(),lastMeter=0;
             while(running.get()){
-                int read=record.read(input,0,input.length,AudioRecord.READ_BLOCKING);
-                if(read<0)throw new IllegalStateException("AudioRecord读取错误："+read);
-                if(read==0)continue;
-                long now=SystemClock.uptimeMillis();
-                if(now-lastLevel>=90){
-                    double sq=0.0; int peak=0;
-                    for(int i=0;i<read;i++){
-                        sq+=(double)input[i]*input[i];
-                        peak=Math.max(peak,Math.abs((int)input[i]));
-                    }
-                    double db=20*Math.log10(Math.max(1,Math.sqrt(sq/read))/32768.0);
-                    int level=(int)Math.round(Math.min(100,Math.max(0,(db+65)/65*100)));
-                    listener.onLevel(level,"峰值："+peak+" / 32768"+(peak>=32500?" · 削波风险":""));
-                    lastLevel=now;
+                if(SystemClock.uptimeMillis()-start>MAX_SECONDS*1000L){
+                    listener.onAudioStatus("达到180秒测试录音上限，自动停止");break;
                 }
-                int n=dsp.process(input,read,downsampled);
-                if(n>0){
-                    short[] packet=new short[n];
-                    System.arraycopy(downsampled,0,packet,0,n);
-                    if(!queue.offer(packet)){
-                        queue.poll(); // 优先保持实时性；不让队列无界增长。
-                        if(!queue.offer(packet))dropped++;
-                        overrun=true;
+                int read=record.read(readBuffer,0,FRAME_SIZE,AudioRecord.READ_BLOCKING);
+                if(read<0)throw new IllegalStateException("AudioRecord读取失败："+read);
+                if(read==0)continue;
+                rawWriter.append(readBuffer,read);
+                long now=SystemClock.uptimeMillis();
+                if(now-lastMeter>100){
+                    double sum=0;for(int i=0;i<read;i++)sum+=(double)readBuffer[i]*readBuffer[i];
+                    double db=20*Math.log10(Math.max(1,Math.sqrt(sum/read))/32768d);
+                    listener.onLevel((int)Math.max(0,Math.min(100,(db+65)/65*100)),"dBFS="+db);
+                    lastMeter=now;
+                }
+                for(int pos=0;pos<read;){
+                    int n=Math.min(FRAME_SIZE-frameFill,read-pos);
+                    System.arraycopy(readBuffer,pos,frame,frameFill,n);
+                    pos+=n;frameFill+=n;
+                    if(frameFill==FRAME_SIZE){
+                        if(denoiser!=null){
+                            long t=System.nanoTime();
+                            denoiser.process(frame,processed);
+                            long duration=System.nanoTime()-t;
+                            maxDenoiseNanos=Math.max(maxDenoiseNanos,duration);
+                            if(duration>10_000_000L)slowFrames++;
+                        }else System.arraycopy(frame,0,processed,0,FRAME_SIZE);
+                        enhancedWriter.append(processed,FRAME_SIZE);
+                        feedAsr(dsp,downsampled,processed,FRAME_SIZE);
+                        frameFill=0;
                     }
                 }
             }
-            if(overrun)listener.onAudioStatus("注意：ASR处理速度不足，曾丢弃音频片段；请减少后台负载");
-        }catch(Exception e){listener.onError("采集异常："+e.getMessage());}
+            if(frameFill>0){
+                // Pad only for model invocation; do not write padded data into WAV.
+                for(int i=frameFill;i<FRAME_SIZE;i++)frame[i]=0;
+                if(denoiser!=null)denoiser.process(frame,processed);
+                else System.arraycopy(frame,0,processed,0,FRAME_SIZE);
+                enhancedWriter.append(processed,frameFill);
+                feedAsr(dsp,downsampled,processed,frameFill);
+            }
+            if(enableRnnoise)listener.onAudioStatus(String.format(Locale.US,
+                "RNNoise最大单帧计算耗时%.2fms；超过10ms帧数%d",maxDenoiseNanos/1e6,slowFrames));
+            success=true;
+        }catch(Exception e){listener.onError("录音/降噪失败："+e.getMessage());}
         finally{
             running.set(false);
-            if(suppressor!=null){try{suppressor.release();}catch(Exception ignored){}}
+            if(denoiser!=null)denoiser.close();
+            if(rawWriter!=null)try{rawWriter.close();}catch(Exception e){listener.onError("原始WAV关闭失败");}
+            if(enhancedWriter!=null)try{enhancedWriter.close();}catch(Exception e){listener.onError("增强WAV关闭失败");}
+            if(ns!=null)try{ns.release();}catch(Exception ignored){}
             try{record.stop();}catch(Exception ignored){}
-            record.release(); activeRecord=null;
+            record.release();
             captureFinished=true;
-            // 通知ASR线程消费最后数据，不能在队列满时阻塞UI。
-            if(!queue.offer(END)){
-                queue.poll();queue.offer(END);
+            if(!queue.offer(END)){queue.poll();queue.offer(END);overrun=true;}
+            if(success && rawFile!=null && enhancedFile!=null){
+                listener.onSaved(rawFile,enhancedFile,"采集源="+rawMode+"；系统NS="+systemNsActive+"；RNNoise="+enableRnnoise);
             }
+            if(overrun)listener.onAudioStatus("ASR队列曾溢出：结果可能漏字");
         }
     }
-
-    private void recognizeLoop(){
+    private void feedAsr(PcmPreprocessor dsp,short[] output,short[] processed,int count){
+        int n=dsp.process(processed,count,output);
+        if(n==0)return;
+        short[] packet=new short[n];System.arraycopy(output,0,packet,0,n);
+        if(!queue.offer(packet)){
+            queue.poll();
+            if(!queue.offer(packet))overrun=true;
+            overrun=true;
+        }
+    }
+    private void recognizeLoop(boolean domainGrammar){
         StringBuilder committed=new StringBuilder();
-        try(Recognizer recognizer=new Recognizer(model,16000.0f)){
+        try(Recognizer recognizer=domainGrammar?
+            new Recognizer(model,16000.0f,GRAMMAR):new Recognizer(model,16000.0f)){
             long lastPartialAt=0;
             while(true){
-                short[] chunk=queue.poll(300, TimeUnit.MILLISECONDS);
+                short[] chunk=queue.poll(300,TimeUnit.MILLISECONDS);
                 if(chunk==null){if(captureFinished&&queue.isEmpty())break;continue;}
                 if(chunk.length==0)break;
                 if(recognizer.acceptWaveForm(chunk,chunk.length)){
                     String part=extract(recognizer.getResult(),"text");
                     if(!part.isEmpty()){
                         if(committed.length()>0)committed.append('，');
-                        committed.append(part);
-                        listener.onPartial(committed.toString());
+                        committed.append(part);listener.onPartial(committed.toString());
                     }
                 }else{
                     long now=SystemClock.uptimeMillis();
@@ -171,15 +217,13 @@ final class AudioCaptureEngine {
             }
             String tail=extract(recognizer.getFinalResult(),"text");
             if(!tail.isEmpty()){
-                if(committed.length()>0)committed.append('，');
-                committed.append(tail);
+                if(committed.length()>0)committed.append('，');committed.append(tail);
             }
             listener.onFinal(committed.toString().trim());
-        }catch(Exception e){listener.onError("离线识别异常："+e.getMessage());}
+        }catch(Exception e){listener.onError("ASR异常："+e.getMessage());}
     }
-
     private static String extract(String json,String key){
         try{return new JSONObject(json).optString(key,"").trim();}
-        catch(Exception ignored){return "";}
+        catch(Exception e){return "";}
     }
 }

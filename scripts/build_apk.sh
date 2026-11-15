@@ -18,6 +18,7 @@ else
     exit 2
 fi
 
+bash scripts/fetch_rnnoise.sh
 python3 scripts/fetch_model.py
 test -s app/src/main/assets/model-cn/am/final.mdl
 bash tests/run_semantic_test.sh
