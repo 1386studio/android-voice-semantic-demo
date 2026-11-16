@@ -8,9 +8,9 @@ import android.media.MediaRecorder;
 import android.media.audiofx.NoiseSuppressor;
 import android.os.Environment;
 import android.os.SystemClock;
-import org.json.JSONObject;
-import org.vosk.Model;
-import org.vosk.Recognizer;
+
+
+
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -19,7 +19,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** 48kHz AudioRecord -> optional real RNNoise 480-sample frames -> 48kHz WAV x2 -> 16kHz Vosk. */
+/** 48kHz AudioRecord -> optional real RNNoise 480-sample frames -> 48kHz WAV x2 -> 16kHz Sherpa-ONNX SenseVoice (segment ASR). */
 final class AudioCaptureEngine {
     interface Listener {
         void onAudioStatus(String message);
@@ -28,23 +28,24 @@ final class AudioCaptureEngine {
         void onFinal(String text);
         void onError(String message);
         void onSaved(File original,File enhanced,String pathInfo);
+        void onVadState(boolean speaking,int segments);
     }
     static final int SAMPLE_RATE=48000, FRAME_SIZE=480;
     private static final int MAX_SECONDS=180;
     private static final short[] END=new short[0];
-    static final String GRAMMAR="[\"查询三号终端的剩余电量\",\"查看当前任务\",\"打开地图\",\"显示当前位置\",\"查询一号仓库饮用水库存\",\"查询二号设备运行状态\",\"最近十分钟\",\"工作组\",\"发送\",\"查询\",\"终端\",\"设备\",\"电量\",\"库存\",\"[unk]\"]";
     private final Context context;
-    private final Model model;
+    private final SherpaAsrEngine model;
+    private final File vadModel;
     private final Listener listener;
     private final AtomicBoolean running=new AtomicBoolean(false);
-    private final ArrayBlockingQueue<short[]> queue=new ArrayBlockingQueue<>(220);
+    private final ArrayBlockingQueue<short[]> queue=new ArrayBlockingQueue<>(2500);
     private volatile boolean captureFinished=false,overrun=false;
     private Thread captureThread,asrThread;
 
-    AudioCaptureEngine(Context context,Model model,Listener listener){
-        this.context=context.getApplicationContext();this.model=model;this.listener=listener;
+    AudioCaptureEngine(Context context,SherpaAsrEngine model,File vadModel,Listener listener){
+        this.context=context.getApplicationContext();this.model=model;this.vadModel=vadModel;this.listener=listener;
     }
-    synchronized boolean start(boolean enableSystemNs,boolean enableRnnoise,boolean domainGrammar){
+    synchronized boolean start(boolean enableSystemNs,boolean enableRnnoise,boolean useNeuralVad){
         if(running.get())return false;
         if((captureThread!=null&&captureThread.isAlive()) || (asrThread!=null&&asrThread.isAlive())){
             listener.onError("上一轮音频仍在处理");return false;
@@ -83,7 +84,7 @@ final class AudioCaptureEngine {
             final NoiseSuppressor effect=ns;
             final boolean systemNsActive=nsEnabled;
             final String rawMode=supportsRaw?"UNPROCESSED(请求)":"VOICE_RECOGNITION(后备)";
-            asrThread=new Thread(()->recognizeLoop(domainGrammar),"voice-asr");
+            asrThread=new Thread(()->recognizeLoop(useNeuralVad),"voice-asr");
             captureThread=new Thread(()->captureLoop(record,effect,rawMode,systemNsActive,enableRnnoise),"voice-capture");
             asrThread.start();captureThread.start();
             return true;
@@ -191,39 +192,66 @@ final class AudioCaptureEngine {
             overrun=true;
         }
     }
-    private void recognizeLoop(boolean domainGrammar){
+
+    private void recognizeLoop(boolean useNeuralVad){
         StringBuilder committed=new StringBuilder();
-        try(Recognizer recognizer=domainGrammar?
-            new Recognizer(model,16000.0f,GRAMMAR):new Recognizer(model,16000.0f)){
-            long lastPartialAt=0;
-            while(true){
-                short[] chunk=queue.poll(300,TimeUnit.MILLISECONDS);
-                if(chunk==null){if(captureFinished&&queue.isEmpty())break;continue;}
-                if(chunk.length==0)break;
-                if(recognizer.acceptWaveForm(chunk,chunk.length)){
-                    String part=extract(recognizer.getResult(),"text");
-                    if(!part.isEmpty()){
-                        if(committed.length()>0)committed.append('，');
-                        committed.append(part);listener.onPartial(committed.toString());
+        int completed=0;
+        boolean lastSpeaking=false;
+        if(useNeuralVad){
+            try(SherpaVadSegmenter vad=new SherpaVadSegmenter(vadModel)){
+                listener.onVadState(false,0);
+                while(true){
+                    short[] packet=queue.poll(300,TimeUnit.MILLISECONDS);
+                    if(packet==null){if(captureFinished&&queue.isEmpty())break;continue;}
+                    if(packet.length==0)break;
+                    for(float[] segment:vad.accept(packet,packet.length)){
+                        String phrase=model.transcribe(segment);
+                        if(!phrase.isEmpty()){
+                            append(committed,phrase);
+                            listener.onPartial(committed.toString());
+                        }
                     }
-                }else{
-                    long now=SystemClock.uptimeMillis();
-                    if(now-lastPartialAt>160){
-                        String partial=extract(recognizer.getPartialResult(),"partial");
-                        if(!partial.isEmpty())listener.onPartial(committed+" "+partial);
-                        lastPartialAt=now;
+                    boolean speaking=vad.isSpeaking();
+                    int count=vad.segmentCount();
+                    if(speaking!=lastSpeaking || completed!=count){
+                        listener.onVadState(speaking,count);
+                        lastSpeaking=speaking;completed=count;
                     }
                 }
+                for(float[] segment:vad.finish()){
+                    append(committed,model.transcribe(segment));
+                }
+                listener.onVadState(false,vad.segmentCount());
+                listener.onFinal(committed.toString().trim());
+            }catch(Exception | LinkageError e){
+                running.set(false);
+                listener.onError("Silero VAD/Sherpa-ONNX识别失败："+e.getMessage());
             }
-            String tail=extract(recognizer.getFinalResult(),"text");
-            if(!tail.isEmpty()){
-                if(committed.length()>0)committed.append('，');committed.append(tail);
-            }
-            listener.onFinal(committed.toString().trim());
-        }catch(Exception e){listener.onError("ASR异常："+e.getMessage());}
+        }else{
+            SpeechChunker chunks=new SpeechChunker();
+            listener.onVadState(false,-1);
+            try{
+                while(true){
+                    short[] packet=queue.poll(300,TimeUnit.MILLISECONDS);
+                    if(packet==null){if(captureFinished&&queue.isEmpty())break;continue;}
+                    if(packet.length==0)break;
+                    for(short[] segment:chunks.accept(packet,packet.length)){
+                        String phrase=model.transcribe(segment);
+                        if(!phrase.isEmpty()){
+                            append(committed,phrase);
+                            listener.onPartial(committed.toString());
+                        }
+                    }
+                }
+                for(short[] segment:chunks.finish())append(committed,model.transcribe(segment));
+                listener.onFinal(committed.toString().trim());
+            }catch(Exception e){running.set(false);listener.onError("能量分段识别失败："+e.getMessage());}
+        }
     }
-    private static String extract(String json,String key){
-        try{return new JSONObject(json).optString(key,"").trim();}
-        catch(Exception e){return "";}
+    private static void append(StringBuilder out,String phrase){
+        if(phrase!=null && !phrase.trim().isEmpty()){
+            if(out.length()>0)out.append('，');
+            out.append(phrase.trim());
+        }
     }
 }

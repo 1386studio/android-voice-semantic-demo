@@ -1,47 +1,53 @@
 package com.example.voicesemantic;
 
-import org.json.JSONObject;
-import org.vosk.Model;
-import org.vosk.Recognizer;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 
-/** Offline ASR re-decode of recorded 48kHz mono PCM16 WAV (for same-sample A/B comparison). */
+/** Same 48kHz WAV -> FIR 16kHz -> same nonstreaming segmenter -> SenseVoice recognizer. */
 final class WavAsrComparator {
-    static String transcribe(Model model,File wav,boolean domainGrammar) throws Exception {
+    static String transcribe(SherpaAsrEngine model,File wav,File vadModel,boolean useNeuralVad) throws Exception {
         if(wav==null||!wav.isFile())throw new IOException("WAV文件不存在");
-        StringBuilder result=new StringBuilder();
+        StringBuilder text=new StringBuilder();
+        SpeechChunker energy=useNeuralVad?null:new SpeechChunker();
+        PcmPreprocessor dsp=new PcmPreprocessor();
         try(FileInputStream in=new FileInputStream(wav);
-            Recognizer recognizer=domainGrammar?
-                new Recognizer(model,16000,AudioCaptureEngine.GRAMMAR):new Recognizer(model,16000)) {
+            SherpaVadSegmenter vad=useNeuralVad?new SherpaVadSegmenter(vadModel):null){
             byte[] header=new byte[44];
-            if(in.read(header)!=44 || header[0]!='R' || header[8]!='W')
-                throw new IOException("非预期PCM16 WAV格式");
+            int pos=0,n;
+            while(pos<header.length && (n=in.read(header,pos,header.length-pos))>0)pos+=n;
+            if(pos!=44 || header[0]!='R'||header[1]!='I'||header[2]!='F'||header[3]!='F'||
+                header[8]!='W'||header[9]!='A'||header[10]!='V'||header[11]!='E')
+                throw new IOException("WAV头无效");
             byte[] bytes=new byte[960];
-            short[] chunk=new short[480];short[] pcm16=new short[170];
-            PcmPreprocessor dsp=new PcmPreprocessor();
-            int buffered=0;
-            for(;;){
-                int n=in.read(bytes,buffered,bytes.length-buffered);
+            short[] frame=new short[480],resampled=new short[170];
+            int carry=0;
+            while(true){
+                n=in.read(bytes,carry,bytes.length-carry);
                 if(n<0)break;
                 if(n==0)continue;
-                buffered+=n;
-                if(buffered<2)continue;
-                int usable=buffered&~1;
-                for(int i=0;i<usable/2;i++)
-                    chunk[i]=(short)((bytes[i*2]&255) | ((bytes[i*2+1]&255)<<8));
-                int count=dsp.process(chunk,usable/2,pcm16);
-                if(count>0 && recognizer.acceptWaveForm(pcm16,count)){
-                    String text=new JSONObject(recognizer.getResult()).optString("text","");
-                    if(!text.isEmpty()){if(result.length()>0)result.append('，');result.append(text);}
+                int size=n+carry, valid=size&~1;
+                for(int i=0;i<valid/2;i++)frame[i]=(short)((bytes[2*i]&255)|((bytes[2*i+1]&255)<<8));
+                int count=dsp.process(frame,valid/2,resampled);
+                if(vad!=null){
+                    for(float[] segment:vad.accept(resampled,count))append(text,model.transcribe(segment));
+                }else{
+                    for(short[] segment:energy.accept(resampled,count))append(text,model.transcribe(segment));
                 }
-                buffered-=usable;
-                if(buffered>0)bytes[0]=bytes[usable];
+                carry=size-valid;
+                if(carry>0)bytes[0]=bytes[valid];
             }
-            String tail=new JSONObject(recognizer.getFinalResult()).optString("text","");
-            if(!tail.isEmpty()){if(result.length()>0)result.append('，');result.append(tail);}
+            if(vad!=null){
+                for(float[] segment:vad.finish())append(text,model.transcribe(segment));
+            }else{
+                for(short[] segment:energy.finish())append(text,model.transcribe(segment));
+            }
         }
-        return result.toString();
+        return text.toString();
+    }
+    private static void append(StringBuilder sb,String part) {
+        if(part!=null&&!part.trim().isEmpty()){
+            if(sb.length()>0)sb.append('，');sb.append(part.trim());
+        }
     }
 }

@@ -1,56 +1,57 @@
 package com.example.voicesemantic;
 
 import android.content.Context;
-import android.content.res.AssetManager;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
-/** 仅将随APK构建时打包的ASR模型复制至私有目录；运行期无下载。 */
+/** Deploy bundled SenseVoice INT8 model to app-private files, no network at runtime. */
 final class ModelManager {
-    private static final String ASSET_ROOT="model-cn";
-    private static final String INSTALL_ROOT="vosk-small-cn-0.22";
-
+    static final String ASSET_ROOT="asr/sensevoice";
+    static final String INSTALL_ROOT="sherpa-sensevoice-int8-2024-07-17";
     static File ensureInstalled(Context context) throws IOException {
-        File dest=new File(context.getFilesDir(), INSTALL_ROOT);
-        if(new File(dest,"am/final.mdl").isFile()) return dest;
-        AssetManager am=context.getAssets();
-        // 用必需权重文件判断是否包含真实模型，而非仅检查assets目录。
-        try(InputStream ignored=am.open(ASSET_ROOT+"/am/final.mdl")) {
-            // found
-        }catch(IOException e){
-            throw new IOException("缺少中文离线模型；请在构建电脑执行 python3 scripts/fetch_model.py，再重新构建APK。",e);
-        }
-        File temp=new File(context.getFilesDir(),INSTALL_ROOT+".installing");
-        deleteRecursively(temp);
-        if(!temp.mkdirs())throw new IOException("无法创建模型临时目录");
-        copyTree(am,ASSET_ROOT,temp);
-        if(!new File(temp,"am/final.mdl").isFile())
-            throw new IOException("ASR模型缺少am/final.mdl");
-        deleteRecursively(dest);
-        if(!temp.renameTo(dest))throw new IOException("ASR模型安装目录重命名失败");
-        return dest;
+        File dir=new File(context.getFilesDir(), INSTALL_ROOT);
+        File model=new File(dir,"model.int8.onnx");
+        File tokens=new File(dir,"tokens.txt");
+        if(model.isFile() && model.length()>100_000_000L && tokens.isFile() && tokens.length()>10_000L)
+            return dir;
+        if(!dir.exists()&&!dir.mkdirs())throw new IOException("无法创建模型目录");
+        copy(context, "model.int8.onnx", model,100_000_000L);
+        copy(context, "tokens.txt",tokens,10_000L);
+        return dir;
     }
-    private static void copyTree(AssetManager assets,String assetPath,File target) throws IOException {
-        String[] children=assets.list(assetPath);
-        if(children==null)throw new IOException("无法读取资产: "+assetPath);
-        if(children.length>0){
-            if(!target.exists()&&!target.mkdirs()) throw new IOException("无法建立目录: "+target);
-            for(String child:children)copyTree(assets,assetPath+"/"+child,new File(target,child));
-        }else{
-            try(InputStream input=assets.open(assetPath);
-                FileOutputStream output=new FileOutputStream(target)){
-                byte[] buffer=new byte[32768]; int n;
-                while((n=input.read(buffer))!=-1)output.write(buffer,0,n);
+    static File ensureVadInstalled(Context context) throws IOException {
+        File dir=new File(context.getFilesDir(),"sherpa-silero-vad-v1");
+        File target=new File(dir,"silero_vad.onnx");
+        if(target.isFile() && target.length()==643854L)return target;
+        if(!dir.exists()&&!dir.mkdirs())throw new IOException("无法创建VAD模型目录");
+        File tmp=new File(dir,"silero_vad.onnx.part");
+        try {
+            try(InputStream in=context.getAssets().open("asr/vad/silero_vad.onnx");
+                FileOutputStream out=new FileOutputStream(tmp)){
+                byte[] buf=new byte[65536];int n;
+                while((n=in.read(buf))!=-1)out.write(buf,0,n);
+                out.getFD().sync();
             }
-        }
+            if(tmp.length()!=643854L)throw new IOException("Silero VAD模型大小异常");
+            if(target.exists()&&!target.delete())throw new IOException("VAD旧模型无法删除");
+            if(!tmp.renameTo(target))throw new IOException("无法安装Silero VAD模型");
+            return target;
+        }finally{if(tmp.exists())tmp.delete();}
     }
-    private static void deleteRecursively(File f){
-        if(f.isDirectory()){
-            File[] children=f.listFiles();
-            if(children!=null)for(File child:children)deleteRecursively(child);
-        }
-        if(f.exists())f.delete();
+    private static void copy(Context context,String name,File target,long minimum) throws IOException {
+        File tmp=new File(target.getParentFile(),name+".part");
+        try {
+            try(InputStream in=context.getAssets().open(ASSET_ROOT+"/"+name);
+                FileOutputStream out=new FileOutputStream(tmp)){
+                byte[] buf=new byte[1024*1024]; int n;
+                while((n=in.read(buf))!=-1)out.write(buf,0,n);
+                out.getFD().sync();
+            }
+            if(tmp.length()<minimum)throw new IOException(name+"长度异常");
+            if(target.exists()&&!target.delete())throw new IOException("无法替换旧模型："+name);
+            if(!tmp.renameTo(target))throw new IOException("模型移动失败："+name);
+        }finally{if(tmp.exists())tmp.delete();}
     }
 }

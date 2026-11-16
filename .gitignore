@@ -13,3 +13,10 @@ app/src/main/assets/model-cn/
 *.task
 *.gguf
 *.wav
+
+# Official offline ASR dependencies downloaded only in CI/build
+app/libs/*.aar
+app/src/main/assets/asr/sensevoice/
+
+# Pinned neural VAD downloaded during CI
+app/src/main/assets/asr/vad/

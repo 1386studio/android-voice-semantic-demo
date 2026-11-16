@@ -11,7 +11,7 @@ permissions:
 jobs:
   android-apk:
     runs-on: ubuntu-24.04
-    timeout-minutes: 65
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,12 +53,21 @@ jobs:
       - name: Fetch RNNoise v0.2 sources and model
         run: bash scripts/fetch_rnnoise.sh
 
-      - name: Download offline Chinese ASR model
-        run: python3 scripts/fetch_model.py
+      - name: Download verified Sherpa-ONNX Android SDK
+        run: python3 scripts/fetch_sherpa_onnx.py
 
-      - name: Verify bundled ASR and RNNoise
+      - name: Download SenseVoice INT8 ASR model
+        run: python3 scripts/fetch_sensevoice.py
+
+      - name: Download verified Silero VAD model
+        run: python3 scripts/fetch_silero_vad.py
+
+      - name: Verify offline ASR assets, VAD and RNNoise
         run: |
-          test -s app/src/main/assets/model-cn/am/final.mdl
+          test "$(stat -c%s app/src/main/assets/asr/sensevoice/model.int8.onnx)" -gt 100000000
+          test -s app/src/main/assets/asr/sensevoice/tokens.txt
+          echo '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6  app/src/main/assets/asr/vad/silero_vad.onnx' | sha256sum -c -
+          test -s app/libs/sherpa-onnx-2.0.1.aar
           test -s app/src/main/cpp/vendor/rnnoise/src/rnnoise_data.c
 
       - name: Run pure Java tests
@@ -67,17 +76,22 @@ jobs:
       - name: Build Debug APK (arm64)
         run: gradle --no-daemon :app:assembleDebug --stacktrace
 
-      - name: Verify APK signature
+      - name: Verify APK signature and packaged native ASR
         run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
+          unzip -Z -1 "$APK" > /tmp/voice-semantic-apk-entries.txt
+          grep -Fxq 'lib/arm64-v8a/libsherpa-onnx-jni.so' /tmp/voice-semantic-apk-entries.txt
+          grep -Fxq 'lib/arm64-v8a/librnnoise_jni.so' /tmp/voice-semantic-apk-entries.txt
+          grep -Fxq 'assets/asr/sensevoice/model.int8.onnx' /tmp/voice-semantic-apk-entries.txt
+          grep -Fxq 'assets/asr/vad/silero_vad.onnx' /tmp/voice-semantic-apk-entries.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           sha256sum "$APK" > app/build/outputs/apk/debug/SHA256SUMS
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: voice-semantic-v02-debug-apk
+          name: voice-semantic-v04-sherpa-vad-debug-apk
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/SHA256SUMS

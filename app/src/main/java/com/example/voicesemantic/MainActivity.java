@@ -16,12 +16,13 @@ import android.provider.OpenableColumns;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ProgressBar;
+import android.widget.RadioGroup;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 import org.json.JSONObject;
 import org.json.JSONException;
-import org.vosk.Model;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -30,19 +31,24 @@ import java.io.OutputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Offline speech-to-semantics V0.2: capture/WAV A-B/RNNoise/Vosk/on-device LLM preview. */
+/** Offline speech-to-semantics V0.4: capture/WAV A-B/RNNoise/SenseVoice/on-device LLM preview. */
 public final class MainActivity extends Activity {
-    private static final int MIC_PERMISSION=1001,IMPORT_LLM=1100,EXPORT_WAV=1101;
+    private static final int MIC_PERMISSION=1001,IMPORT_LLM=1100,EXPORT_WAV=1101,IMPORT_LEXICON=1102;
     private final Handler ui=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private final SemanticAgent fallback=new SemanticAgent();
     private final LocalLlmAgent llm=new LocalLlmAgent();
-    private TextView modelStatus,audioStatus,transcriptView,semanticStatus,jsonView,llmStatus,recordingStatus,rawAsrView,cerStatus;
+    private TextView modelStatus,audioStatus,transcriptView,semanticStatus,jsonView,llmStatus,recordingStatus,rawAsrView,cerStatus,lexiconStatus,asrModeStatus;
     private EditText manualInput,referenceInput;
-    private Switch systemSwitch,rnSwitch,grammarSwitch;
+    private Switch systemSwitch,rnSwitch,vadSwitch;
+    private TextView vadStatus;
+    private RadioGroup asrModeGroup;
+    private Button importLexiconBtn,resetLexiconBtn;
+    private volatile DomainLexiconRepository.Snapshot lexicon;
     private ProgressBar levelBar;
     private Button startBtn,stopBtn,playRaw,playEnhanced,exportRaw,exportEnhanced;
-    private volatile Model model;
+    private volatile SherpaAsrEngine model;
+    private volatile File vadModel;
     private AudioCaptureEngine engine;
     private String lastJson="{}";
     private File lastRaw,lastEnhanced,exportSource;
@@ -66,7 +72,22 @@ public final class MainActivity extends Activity {
         manualInput=findViewById(R.id.manualInput);
         systemSwitch=findViewById(R.id.nsSwitch);
         rnSwitch=findViewById(R.id.rnSwitch);
-        grammarSwitch=findViewById(R.id.grammarSwitch);
+        vadSwitch=findViewById(R.id.vadSwitch);
+        vadStatus=findViewById(R.id.vadStatus);
+        vadSwitch.setChecked(getSharedPreferences("asr_options",MODE_PRIVATE)
+            .getBoolean("neural_vad",true));
+        vadStatus.setText(vadSwitch.isChecked() ? "Silero VAD待启动 · 阈值0.50" : "VAD关闭：使用能量分段作对照");
+        vadSwitch.setOnCheckedChangeListener((v,enabled)->{
+            getSharedPreferences("asr_options",MODE_PRIVATE).edit()
+                .putBoolean("neural_vad",enabled).apply();
+            vadStatus.setText(enabled ? "Silero VAD待启动" : "VAD关闭：使用能量分段作对照");
+        });
+        lexiconStatus=findViewById(R.id.lexiconStatus);
+        asrModeStatus=findViewById(R.id.asrModeStatus);
+        asrModeGroup=findViewById(R.id.asrModeGroup);
+        importLexiconBtn=findViewById(R.id.importLexiconBtn);
+        resetLexiconBtn=findViewById(R.id.resetLexiconBtn);
+        initLexiconUi();
         levelBar=findViewById(R.id.levelBar);
         startBtn=findViewById(R.id.startBtn);
         stopBtn=findViewById(R.id.stopBtn);
@@ -102,25 +123,76 @@ public final class MainActivity extends Activity {
         });
         findViewById(R.id.importLlmBtn).setOnClickListener(v->importModel());
         recordingButtons(false);
-        loadVosk();
+        loadSherpa();
         File savedModel=new File(new File(getFilesDir(),"llm"),"semantic.task");
         if(savedModel.isFile())loadLlm(savedModel);
         else llmStatus.setText("未导入本地小模型；使用规则Agent。可导入MediaPipe兼容的.task模型。");
+    }
+    private void initLexiconUi(){
+        try {
+            lexicon=DomainLexiconRepository.load(this);
+            lexiconStatus.setText(lexicon.summary());
+        } catch(Exception e) {
+            lexiconStatus.setText("词典不可用："+e.getMessage());
+        }
+        boolean shortMode=getSharedPreferences("asr_options",MODE_PRIVATE)
+            .getBoolean("short_mode",false);
+        asrModeGroup.check(shortMode ? R.id.asrModeShort : R.id.asrModeNatural);
+        asrModeGroup.setOnCheckedChangeListener((group,id)->{
+            boolean shortSelected=id==R.id.asrModeShort;
+            getSharedPreferences("asr_options",MODE_PRIVATE).edit()
+                .putBoolean("short_mode",shortSelected).apply();
+            updateAsrModeStatus();
+        });
+        updateAsrModeStatus();
+        importLexiconBtn.setOnClickListener(v->{
+            if(isRecording()){toast("请先停止录音再导入词典");return;}
+            Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("application/json");
+            startActivityForResult(intent,IMPORT_LEXICON);
+        });
+        resetLexiconBtn.setOnClickListener(v->{
+            if(isRecording()){toast("请先停止录音再恢复词典");return;}
+            worker.execute(()->{
+                try{
+                    DomainLexiconRepository.Snapshot restored=DomainLexiconRepository.reset(this);
+                    lexicon=restored;
+                    ui.post(()->{if(!destroyed){lexiconStatus.setText(restored.summary());updateAsrModeStatus();}});
+                }catch(Exception e){ui.post(()->{if(!destroyed)toast("恢复词典失败："+e.getMessage());});}
+            });
+        });
+    }
+    private boolean isRecording(){return engine!=null && engine.isRunning();}
+    private void updateAsrModeStatus(){
+        if(asrModeGroup.getCheckedRadioButtonId()==R.id.asrModeShort){
+            DomainLexiconRepository.Snapshot current=lexicon;
+            asrModeStatus.setText(current==null ? "短指令模式：词典不可用，请导入或恢复默认词典"
+                : "短指令模式："+current.phraseCount+"条参考短语（SenseVoice不支持Vosk式受限grammar；本版不强制替换识别结果）");
+        }else asrModeStatus.setText("自然语言模式：SenseVoice开放识别（离线非流式分段）");
+    }
+    private void setAsrControlsEnabled(boolean enabled){
+        asrModeGroup.setEnabled(enabled);
+        for(int i=0;i<asrModeGroup.getChildCount();i++)asrModeGroup.getChildAt(i).setEnabled(enabled);
+        importLexiconBtn.setEnabled(enabled);
+        resetLexiconBtn.setEnabled(enabled);
+        vadSwitch.setEnabled(enabled);
     }
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
     private void recordingButtons(boolean enabled){
         playRaw.setEnabled(enabled);playEnhanced.setEnabled(enabled);
         exportRaw.setEnabled(enabled);exportEnhanced.setEnabled(enabled);
     }
-    private void loadVosk(){
+    private void loadSherpa(){
         worker.execute(()->{
             try{
                 File folder=ModelManager.ensureInstalled(getApplicationContext());
-                model=new Model(folder.getAbsolutePath());
+                vadModel=ModelManager.ensureVadInstalled(getApplicationContext());
+                model=new SherpaAsrEngine(folder);
                 ui.post(()->{if(!destroyed){
-                    modelStatus.setText("Vosk 中文离线ASR就绪 · 领域词表可选");startBtn.setEnabled(true);
+                    modelStatus.setText("Sherpa-ONNX SenseVoice INT8 + Silero VAD就绪 · 16kHz");startBtn.setEnabled(true);
                 }});
-            }catch(Exception e){ui.post(()->{if(!destroyed){
+            }catch(Throwable e){ui.post(()->{if(!destroyed){
                 modelStatus.setText("无法载入离线ASR："+e.getMessage());startBtn.setEnabled(false);
             }});}
         });
@@ -148,21 +220,42 @@ public final class MainActivity extends Activity {
         transcriptView.setText("正在采音…");
         semanticStatus.setText("等待语音识别");
         lastJson="{}";jsonView.setText(lastJson);
-        final boolean domainGrammar=grammarSwitch.isChecked();
-        AudioCaptureEngine capture=new AudioCaptureEngine(this,model,new AudioCaptureEngine.Listener(){
+        final boolean useNeuralVad=vadSwitch.isChecked();
+        if(useNeuralVad && vadModel==null){toast("Silero VAD模型尚未装载");return;}
+        vadStatus.setText(useNeuralVad ? "Silero VAD初始化中…" : "VAD关闭：使用能量分段作对照");
+        final boolean shortMode=asrModeGroup.getCheckedRadioButtonId()==R.id.asrModeShort;
+        final DomainLexiconRepository.Snapshot snapshot=lexicon;
+        if(shortMode && snapshot==null){toast("领域词典未加载，请恢复默认词典");return;}
+        // Snapshot of mode; SenseVoice does NOT support SenseVoice grammar. Never claim hard-constrained decoding.
+        final String domainGrammar=shortMode ? snapshot.grammar : null; // retained only as metadata
+        AudioCaptureEngine capture=new AudioCaptureEngine(this,model,vadModel,new AudioCaptureEngine.Listener(){
+            @Override public void onVadState(boolean speaking,int segments){
+                ui.post(()->{if(!destroyed){
+                    vadStatus.setText(segments<0 ? "VAD关闭：能量分段对照" :
+                        "Silero VAD："+(speaking?"检测到语音":"静音/等待语音")+" · 已切分"+segments+"段");
+                }});
+            }
             @Override public void onAudioStatus(String s){ui.post(()->{if(!destroyed)audioStatus.setText(s);});}
             @Override public void onLevel(int value,String detail){ui.post(()->{if(!destroyed)levelBar.setProgress(value);});}
             @Override public void onPartial(String s){ui.post(()->{if(!destroyed)transcriptView.setText(s);});}
             @Override public void onFinal(String s){ui.post(()->{
                 if(destroyed)return;
                 startBtn.setEnabled(true);stopBtn.setEnabled(false);levelBar.setProgress(0);
+                setAsrControlsEnabled(true);
                 transcriptView.setText(s.isEmpty()?"未识别到清晰语音":s);
                 enhancedTranscript=s;
+                if(shortMode && snapshot!=null){
+                    String hint=ShortCommandHints.suggest(s,snapshot.phrases);
+                    asrModeStatus.setText(hint.isEmpty()
+                        ? "短指令模式：未找到明确的词典候选；保留SenseVoice原始转写"
+                        : "领域词典候选（未自动替换）："+hint);
+                }
                 if(s.isEmpty())semanticStatus.setText("未识别到语音，请重录或使用文本测试");
                 else renderSemantic(s,"voice");
             });}
             @Override public void onError(String msg){ui.post(()->{if(!destroyed){
                 startBtn.setEnabled(true);stopBtn.setEnabled(false);
+                setAsrControlsEnabled(true);
                 audioStatus.setText(msg);toast(msg);
             }});}
             @Override public void onSaved(File raw,File enhanced,String details){ui.post(()->{
@@ -174,7 +267,7 @@ public final class MainActivity extends Activity {
                     "\n注意：原始流可能包含手机厂商的硬件前处理。");
                 worker.execute(()->{
                     try{
-                        String rawText=WavAsrComparator.transcribe(model,raw,domainGrammar);
+                        String rawText=WavAsrComparator.transcribe(model,raw,vadModel,useNeuralVad);
                         ui.post(()->{if(!destroyed){
                             rawTranscript=rawText;
                             rawAsrView.setText("采集流ASR复核："+(rawText.isEmpty()?"未识别到":rawText));
@@ -184,8 +277,9 @@ public final class MainActivity extends Activity {
                 });
             });}
         });
-        if(capture.start(systemSwitch.isChecked(),rnSwitch.isChecked(),domainGrammar)){
+        if(capture.start(systemSwitch.isChecked(),rnSwitch.isChecked(),useNeuralVad)){
             engine=capture;startBtn.setEnabled(false);stopBtn.setEnabled(true);
+            setAsrControlsEnabled(false);
             audioStatus.setText("开始采音…");
         }
     }
@@ -271,7 +365,25 @@ public final class MainActivity extends Activity {
         super.onActivityResult(requestCode,resultCode,data);
         if(resultCode!=RESULT_OK || data==null || data.getData()==null)return;
         Uri uri=data.getData();
-        if(requestCode==IMPORT_LLM){
+        if(requestCode==IMPORT_LEXICON){
+            if(isRecording()){toast("录音中不可导入词典");return;}
+            lexiconStatus.setText("正在导入并校验词典JSON…");
+            worker.execute(()->{
+                try{
+                    DomainLexiconRepository.Snapshot imported=DomainLexiconRepository.importUri(this,uri);
+                    lexicon=imported;
+                    ui.post(()->{if(!destroyed){
+                        lexiconStatus.setText(imported.summary());updateAsrModeStatus();
+                        toast("词典导入成功，下次录音生效");
+                    }});
+                }catch(Exception e){
+                    ui.post(()->{if(!destroyed){
+                        lexiconStatus.setText("导入失败，原词典仍保留："+e.getMessage());
+                        updateAsrModeStatus();
+                    }});
+                }
+            });
+        }else if(requestCode==IMPORT_LLM){
             llmStatus.setText("正在导入模型文件…");
             worker.execute(()->{
                 try{

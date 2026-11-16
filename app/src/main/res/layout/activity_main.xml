@@ -9,7 +9,7 @@
         android:textSize="25sp" android:textStyle="bold" />
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="4dp" style="@style/DetailText"
-        android:text="V0.2 完全离线 · 双WAV对比 · RNNoise · 本地LLM可选" />
+        android:text="V0.4 完全离线 · SenseVoice INT8 · Silero VAD · RNNoise · 本地Agent" />
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="12dp" android:padding="14dp" android:orientation="vertical"
@@ -25,10 +25,45 @@
       <Switch android:id="@+id/rnSwitch" android:layout_width="match_parent"
           android:layout_height="wrap_content" android:checked="true"
           android:text="RNNoise 48kHz/10ms 实时神经降噪" android:textColor="@color/text_dark" />
-      <Switch android:id="@+id/grammarSwitch" android:layout_width="match_parent"
-          android:layout_height="wrap_content" android:checked="false"
-          android:text="ASR领域短指令词表（自由口述时关闭）"
+      <Switch android:id="@+id/vadSwitch" android:layout_width="match_parent"
+          android:layout_height="wrap_content" android:checked="true"
+          android:text="Silero AI VAD语音活动检测（默认开启）"
           android:textColor="@color/text_dark" />
+      <TextView android:id="@+id/vadStatus" android:layout_width="match_parent"
+          android:layout_height="wrap_content" style="@style/DetailText"
+          android:text="Silero VAD待启动 · 16kHz / 512样本 / 阈值0.50" />
+      <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+          style="@style/CardTitle" android:layout_marginTop="10dp"
+          android:text="ASR识别模式" />
+      <RadioGroup android:id="@+id/asrModeGroup"
+          android:layout_width="match_parent" android:layout_height="wrap_content"
+          android:orientation="vertical">
+        <RadioButton android:id="@+id/asrModeNatural"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:checked="true" android:text="自然语言模式（开放词表）" />
+        <RadioButton android:id="@+id/asrModeShort"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="短指令模式（词典参考，未实施硬约束）" />
+      </RadioGroup>
+      <TextView android:id="@+id/asrModeStatus"
+          android:layout_width="match_parent" android:layout_height="wrap_content"
+          style="@style/DetailText" android:text="自然语言模式：不启用受限词典" />
+      <TextView android:id="@+id/lexiconStatus"
+          android:layout_width="match_parent" android:layout_height="wrap_content"
+          style="@style/DetailText" android:text="正在加载本机领域词典…" />
+      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+          android:orientation="horizontal">
+        <Button android:id="@+id/importLexiconBtn"
+            android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:text="导入JSON词典" />
+        <Button android:id="@+id/resetLexiconBtn"
+            android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:layout_marginStart="6dp"
+            android:text="恢复内置词典" />
+      </LinearLayout>
+      <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+          style="@style/DetailText"
+          android:text="词典仅供短指令参考，不强制限制SenseVoice识别；录音期间固定VAD、模式和词典。" />
       <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
           android:orientation="horizontal">
         <Button android:id="@+id/startBtn" android:layout_width="0dp"
